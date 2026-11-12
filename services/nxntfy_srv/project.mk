@@ -1,0 +1,6 @@
+USERKIT_PROJECT := nxntfy_srv
+USERKIT_SERVICE_NAME := notify
+USERKIT_EXECUTABLE := /sys/services/nxntfy_srv
+USERKIT_DEFAULT_MODE := lock
+USERKIT_COMPAT_REGISTRY := srv.notify_pid
+USERKIT_AUTHORITY := 

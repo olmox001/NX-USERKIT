@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "sbin": [
+    {"project": "nxinit", "executable": "/sbin/nxinit"},
+    {"project": "nxdemo1init", "executable": "/sbin/nxdemo1init"}
+  ],
+  "services": [
+    {"project":"nxntfy_srv","name":"notify","executable":"/sys/services/nxntfy_srv","mode":"lock","registry":"srv.notify_pid","authority":""},
+    {"project":"nxexecd","name":"exec","executable":"/sys/services/nxexecd","mode":"lock","registry":"","authority":""},
+    {"project":"nxtimerdd","name":"timer","executable":"/sys/services/nxtimerdd","mode":"lock","registry":"","authority":""},
+    {"project":"nxpaxd","name":"pax","executable":"/sys/services/nxpaxd","mode":"lock","registry":"","authority":""},
+    {"project":"nxcompositor","name":"compositor","executable":"/sys/services/nxcompositor","mode":"lock","registry":"srv.compositor_pid","authority":""},
+    {"project":"nxkeyboardd","name":"keyboard","executable":"/sys/services/nxkeyboardd","mode":"lock","registry":"","authority":""},
+    {"project":"nxmoused","name":"pointer","executable":"/sys/services/nxmoused","mode":"lock","registry":"srv.mouse_pid","authority":"window-manage"},
+    {"project":"nxttyd","name":"shell","executable":"/sys/services/nxttyd","mode":"start","registry":"","authority":""}
+  ],
+  "examples": [
+    {"project":"nxnotify_registry","replaces":"nxntfy_srv","name":"notify","executable":"/sys/services/nxnotify_registry","mode":"lock","registry":"srv.notify_pid","authority":""},
+    {"project":"nxexample_echo","name":"echo","executable":"/sys/services/nxexample_echo","mode":"lock","registry":"","authority":""}
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "profile": "NEXS-Power12-NX-USERKIT",
+  "source_roots": [
+    "sbin",
+    "services",
+    "tests"
+  ],
+  "first_party_root_globs": [],
+  "extensions": [
+    ".c",
+    ".h",
+    ".S",
+    ".s"
+  ],
+  "excluded_prefixes": [
+    "build/"
+  ],
+  "stale_suffixes": [
+    ".c.new",
+    ".h.new",
+    ".c.old",
+    ".h.old"
+  ],
+  "general_allocators": [
+    "malloc",
+    "calloc",
+    "realloc",
+    "free",
+    "kmalloc",
+    "kfree",
+    "pmm_alloc_page",
+    "pmm_alloc_pages",
+    "pmm_alloc_pages_dma",
+    "pmm_free_page",
+    "pmm_free_pages"
+  ],
+  "forbidden_jump_calls": [
+    "setjmp",
+    "longjmp",
+    "_setjmp",
+    "_longjmp",
+    "sigsetjmp",
+    "siglongjmp"
+  ],
+  "assertion_calls": [
+    "assert",
+    "__assert_fail",
+    "__assert_rtn",
+    "KASSERT",
+    "KASSERT_EQ",
+    "NX_ASSERT",
+    "SCHED_ASSERT"
+  ],
+  "assertion_tokens": [
+    "assert(",
+    "KASSERT(",
+    "KASSERT_EQ(",
+    "NX_ASSERT(",
+    "SCHED_ASSERT(",
+    "_Static_assert",
+    "static_assert"
+  ],
+  "allowed_function_pointer_prefixes": [],
+  "function_max_lines": 50,
+  "audit_arches": [
+    "amd64",
+    "aarch64"
+  ],
+  "limits": {
+    "services/nxtimerdd/src/main.c::TIMERD_MAX_REPLY": {
+      "kind": "wire_contract",
+      "provenance": "sizeof(struct os1_time_service_timer_stats)",
+      "rationale": "largest TIME service response defined by the generated TIME ABI contract"
+    },
+    "services/nxtimerdd/src/main.c::TIMERD_CLAIM_TRIES": {
+      "kind": "service_restart_policy",
+      "provenance": "nxinit supervised named-port handover window",
+      "rationale": "bounds name-claim retries after a prior service receiver is being torn down"
+    },
+    "services/nxcompositor/src/main.c::NXCOMPOSITOR_MAX_WINDOWS": {
+      "kind": "screen_resource_contract",
+      "provenance": "existing window enumeration ABI maximum of 40",
+      "rationale": "bounds per-frame window snapshots in user compositor"
+    },
+    "services/nxcompositor/src/main.c::NXCOMPOSITOR_MAX_PIXELS": {
+      "kind": "screen_resource_contract",
+      "provenance": "16 Mi pixel present/snapshot buffer validation in original compositor",
+      "rationale": "bounds userland allocation and composition to 64 MiB per buffer"
+    },
+    "services/nxmoused/src/main.c::MAX_WINDOWS": {
+      "kind": "screen_resource_contract",
+      "provenance": "40 legacy window enumeration entries",
+      "rationale": "bounded pointer hit-test snapshot scan"
+    },
+    "services/nxntfy_srv/src/main.c::WARN_DEDUP_MAX": {
+      "kind": "notification_policy",
+      "provenance": "existing fixed warning deduplication store, 16 entries",
+      "rationale": "bounds deduplicated notification state without unbounded userland growth"
+    },
+    "services/nxmoused/src/main.c::NX_MOUSE_MAX_DEVICES": {
+      "kind": "wire_contract",
+      "provenance": "system/include/api/os1_input.h: os1_raw_input_event_v1.device_id is uint8_t, exactly 256 representable values",
+      "rationale": "index a per-device 3-button state array for every representable device_id (0..255) without narrowing or leaking global mutable state"
+    },
+    "services/nxttyd/src/main.c::TTY_MAX_PIXELS": {
+      "kind": "resource_budget",
+      "provenance": "kernel/graphics/compositor.c 4096x4096 maximum window; session uses 1024x768 maximum guarded by TTY_MAX_PIXELS and its BSS array",
+      "rationale": "limits one session raster buffer to 3 MiB; explicitly less than kernel's window allocation cap"
+    }
+  },
+  "operations": {}
+}
