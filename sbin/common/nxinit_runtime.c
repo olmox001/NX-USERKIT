@@ -1,13 +1,14 @@
 /*
  * nxinit — declarative system startup policy in userland.
  *
- * The generic PID1 nxmanageDD extension reads its own init ELF from VFS and
- * runs this process as ROOT. Init reads a protected service manifest; it
+ * The machine boot provider publishes the selected init image identity and
+ * nxmanageDD starts this process as ROOT. Init reads a protected manifest; it
  * declares order, one-shot dependencies and persistent locks over the
  * authenticated bounded manager port. It NEVER owns the restart queue or
  * process-reaping policy. The manager retains real process ownership.
  */
 #include <nxmanage.h>
+#include <nxsystem_image.h>
 #include <nxinit_runtime.h>
 #include <os1.h>
 #include <stdint.h>
@@ -165,8 +166,8 @@ static int nxinit_declare(int port, unsigned slot, uint32_t mode,
 }
 
 /* Parses one immutable manifest line, never changes daemon policy.
- * The three separators are mandatory so malformed lines cannot silently
- * change the interpretation of executable paths or registry authority. */
+ * The separators are mandatory so malformed lines cannot silently change
+ * the interpretation of image identity, arguments or registry authority. */
 static int nxinit_line(int port, unsigned slot, char *line, int mdebug) {
   char *field[6] = {line, NULL, NULL, NULL, NULL, NULL};
   unsigned split = 1U;
@@ -178,7 +179,8 @@ static int nxinit_line(int port, unsigned slot, char *line, int mdebug) {
       field[split++] = line + i + 1U;
     }
   }
-  if ((split != 5U && split != 6U) || field[2][0] != '/')
+  if ((split != 5U && split != 6U) ||
+      !nxsystem_image_identity_valid(field[2]))
     return -EINVAL;
   uint32_t mode = 0U;
   if (strcmp(field[1], "lock") == 0)
