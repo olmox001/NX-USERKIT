@@ -303,11 +303,11 @@ static int notif_hide_if_elapsed(struct notify_state *s) {
 }
 
 static int notif_iteration(struct notify_state *s, int port) {
-  long packed = OS1_display_info();
-  int sw = (int)((packed >> 16) & 0xffff);
-  int sh = (int)(packed & 0xffff);
-  if (sw > 0 && sh > 0 &&
-      (sw != s->screen_w || sh != s->screen_h)) {
+  int sw = 0, sh = 0;
+  int display_status = OS1_display_get_size(&sw, &sh);
+  if (display_status != 0)
+    return display_status;
+  if (sw != s->screen_w || sh != s->screen_h) {
     int resized = notif_window_resize(s, sw, sh);
     if (resized != 0) return resized;
   }
@@ -336,12 +336,13 @@ int main(void) {
   state.font = font_load("/fonts/Rewir-Light.off");
   /* Font failure degrades only popup rendering; the broker stays available. */
   notif_palette(&state, notif_theme_is_light());
-  long info = OS1_display_info();
-  int sw = (int)((info >> 16) & 0xffff);
-  int sh = (int)(info & 0xffff);
-  if (sw <= 0) sw = 800;
-  if (sh <= 0) sh = 600;
-  int result = notif_window_resize(&state, sw, sh);
+  int sw = 0, sh = 0;
+  int result = OS1_display_get_size(&sw, &sh);
+  if (result != 0) {
+    OS1_report_error("nxntfy_srv.display_size", result);
+    return 1;
+  }
+  result = notif_window_resize(&state, sw, sh);
   if (result == 0) {
     int port = OS1_port_create(OS1NX_PORT_NOTIFY);
     if (port >= 0) {

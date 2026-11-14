@@ -30,9 +30,40 @@ struct compositor_state {
   int font_loaded;
   int pointer_x;
   int pointer_y;
+  int pointer_initialized;
+  uint64_t retry_generation;
   struct os1_gfx_buffer frame;
+  struct os1_gfx_buffer scene;
   struct os1_gfx_buffer snapshot;
 };
+
+static void compositor_state_init(struct compositor_state *owner) {
+  OS1_gfx_buffer_init(&owner->frame);
+  OS1_gfx_buffer_init(&owner->scene);
+  OS1_gfx_buffer_init(&owner->snapshot);
+}
+
+static void compositor_state_release(struct compositor_state *owner) {
+  int snapshot = OS1_gfx_buffer_release(&owner->snapshot);
+  int scene = OS1_gfx_buffer_release(&owner->scene);
+  int frame = OS1_gfx_buffer_release(&owner->frame);
+  if (snapshot != 0) OS1_report_error("nxcompositor.snapshot_release", snapshot);
+  if (scene != 0) OS1_report_error("nxcompositor.scene_release", scene);
+  if (frame != 0) OS1_report_error("nxcompositor.frame_release", frame);
+}
+
+static void initialize_pointer(struct compositor_state *owner, int width,
+                               int height) {
+  if (owner->pointer_initialized == 0) {
+    owner->pointer_x = width / 2;
+    owner->pointer_y = height / 2;
+    owner->pointer_initialized = 1;
+  }
+  if (owner->pointer_x >= width) owner->pointer_x = width - 1;
+  if (owner->pointer_y >= height) owner->pointer_y = height - 1;
+  if (owner->pointer_x < 0) owner->pointer_x = 0;
+  if (owner->pointer_y < 0) owner->pointer_y = 0;
+}
 
 static void consume_pointer_updates(struct compositor_state *owner) {
   struct ipc_message msg;
@@ -246,37 +277,77 @@ static void draw_cursor(const struct compositor_state *owner,
   }
 }
 
+static int compositor_pixel_count(int width, int height, size_t *total) {
+  if (total == NULL || width <= 0 || height <= 0 ||
+      (size_t)width > NXCOMPOSITOR_MAX_PIXELS / (size_t)height)
+    return -EINVAL;
+  *total = (size_t)width * (size_t)height;
+  return 0;
+}
+
+static int compose_scene(struct compositor_state *owner,
+                         struct os1_gfx_surface *scene) {
+  paint_background(scene, os1_theme_background_active());
+  int drawn = draw_windows(owner, scene);
+  if (drawn != 0) return drawn;
+  draw_cursor(owner, scene);
+  return 0;
+}
+
 static int render_frame(struct compositor_state *owner,
                         uint32_t target_width, uint32_t target_height) {
-  if (target_width == 0U || target_height == 0U ||
-      (size_t)target_width >
-          NXCOMPOSITOR_MAX_PIXELS / (size_t)target_height)
+  int output_w = (int)target_width, output_h = (int)target_height;
+  int logical_w = 0, logical_h = 0;
+  size_t output_pixels = 0U, logical_pixels = 0U;
+  if (OS1_display_get_size(&logical_w, &logical_h) != 0 ||
+      compositor_pixel_count(output_w, output_h, &output_pixels) != 0 ||
+      compositor_pixel_count(logical_w, logical_h, &logical_pixels) != 0)
     return -EINVAL;
-  int width = (int)target_width;
-  int height = (int)target_height;
-  size_t total = (size_t)target_width * (size_t)target_height;
-  int allocated = OS1_gfx_buffer_reserve(&owner->frame, total);
+  initialize_pointer(owner, logical_w, logical_h);
+  int allocated = OS1_gfx_buffer_reserve(&owner->frame, output_pixels);
   if (allocated != 0) return allocated;
-  struct os1_gfx_surface frame = {
-      owner->frame.active.view.address, (size_t)width, (size_t)height,
-      (size_t)width, total};
-  paint_background(&frame, os1_theme_background_active());
-  int drawn = draw_windows(owner, &frame);
-  if (drawn != 0) return drawn;
-  draw_cursor(owner, &frame);
+  struct os1_gfx_surface output = {
+      owner->frame.active.view.address, (size_t)output_w, (size_t)output_h,
+      (size_t)output_w, output_pixels};
+  struct os1_gfx_surface *scene = &output;
+  struct os1_gfx_surface logical = {0};
+  if (logical_w != output_w || logical_h != output_h) {
+    allocated = OS1_gfx_buffer_reserve(&owner->scene, logical_pixels);
+    if (allocated != 0) return allocated;
+    logical = (struct os1_gfx_surface){owner->scene.active.view.address,
+        (size_t)logical_w, (size_t)logical_h, (size_t)logical_w,
+        logical_pixels};
+    scene = &logical;
+  }
+  int composed = compose_scene(owner, scene);
+  if (composed != 0) return composed;
+  if (scene != &output) {
+    os1_gfx_clear(&output, 0xff000000u);
+    os1_gfx_composite_scaled(&output, scene, 0, 0, output_w, output_h);
+  }
   struct os1_compositor_present_v1 present = {
-      .abi_version = OS1_COMPOSITOR_ABI_V1,
-      .struct_size = sizeof(present),
-      .width = width, .height = height, .stride = width,
-      .pixels = owner->frame.active.view.address, .pixel_capacity = total
-  };
+      .abi_version = OS1_COMPOSITOR_ABI_V1, .struct_size = sizeof(present),
+      .width = output_w, .height = output_h, .stride = output_w,
+      .pixels = output.pixels, .pixel_capacity = output_pixels};
   return (int)OS1_display_present(&present);
 }
 
+static int render_generation(struct compositor_state *owner,
+                             const struct os1_surface_state_v1 *state) {
+  int rendered = render_frame(owner, state->width, state->height);
+  if (rendered != -EAGAIN) {
+    owner->retry_generation = 0U;
+    return rendered;
+  }
+  if (owner->retry_generation == state->generation)
+    return -EIO;
+  owner->retry_generation = state->generation;
+  return EAGAIN;
+}
+
 int main(void) {
-  struct compositor_state owner = {.pointer_x = 640, .pointer_y = 400};
-  OS1_gfx_buffer_init(&owner.frame);
-  OS1_gfx_buffer_init(&owner.snapshot);
+  struct compositor_state owner = {0};
+  compositor_state_init(&owner);
   long events = OS1_surface_events_open(OS1_RIGHT_READ | OS1_RIGHT_WAIT);
   if (events < 0) {
     OS1_report_error("nxcompositor.surface_events_open", (int)events);
@@ -291,15 +362,16 @@ int main(void) {
                        (int)(current < 0 ? current : -EIO));
       running = 0;
     }
+    int render_status = 0;
     if (running != 0) {
       consume_pointer_updates(&owner);
-      int rendered = render_frame(&owner, state.width, state.height);
-      if (rendered != 0) {
-        OS1_report_error("nxcompositor.render_frame", rendered);
+      render_status = render_generation(&owner, &state);
+      if (render_status < 0) {
+        OS1_report_error("nxcompositor.render_frame", render_status);
         running = 0;
       }
     }
-    if (running != 0) {
+    if (running != 0 && render_status == 0) {
       long waited = OS1_surface_wait((int)events, state.generation);
       if (waited != 0) {
         OS1_report_error("nxcompositor.surface_wait",
@@ -310,12 +382,7 @@ int main(void) {
   }
   /* Retain explicit mapping/handle ownership through error cleanup. The
    * provider also detaches outstanding mappings when this process exits. */
-  int snapshot_closed = OS1_gfx_buffer_release(&owner.snapshot);
-  int frame_closed = OS1_gfx_buffer_release(&owner.frame);
-  if (snapshot_closed != 0)
-    OS1_report_error("nxcompositor.snapshot_release", snapshot_closed);
-  if (frame_closed != 0)
-    OS1_report_error("nxcompositor.frame_release", frame_closed);
+  compositor_state_release(&owner);
   long closed = OS1low_handle_close((int)events);
   if (closed != 0)
     OS1_report_error("nxcompositor.events_close",

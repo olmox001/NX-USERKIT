@@ -114,10 +114,11 @@ static void publish_pointer(struct nxmouse_state *state) {
 }
 
 static void clamp_pointer(struct nxmouse_state *state) {
-  long d = OS1_display_info();
-  int w = (int)((d >> 16) & 0xffff), h = (int)(d & 0xffff);
-  if (w > 0 && state->px >= w) state->px = w - 1;
-  if (h > 0 && state->py >= h) state->py = h - 1;
+  int w = 0, h = 0;
+  if (OS1_display_get_size(&w, &h) == 0) {
+    if (state->px >= w) state->px = w - 1;
+    if (state->py >= h) state->py = h - 1;
+  }
   if (state->px < 0) state->px = 0;
   if (state->py < 0) state->py = 0;
 }
@@ -296,11 +297,11 @@ static void mouse_reset_after_drop(struct nxmouse_state *state) {
 static void mouse_route_relative(struct nxmouse_state *state,
                                  const struct os1_raw_input_event_v1 *event) {
   if (event->code == REL_X || event->code == REL_Y) {
-    long display = OS1_display_info();
-    int limit = event->code == REL_X ? (int)((display >> 16) & 0xffff)
-                                     : (int)(display & 0xffff);
+    int width = 0, height = 0;
+    int display_status = OS1_display_get_size(&width, &height);
+    int limit = event->code == REL_X ? width : height;
     int *coordinate = event->code == REL_X ? &state->px : &state->py;
-    if (limit > 0) {
+    if (display_status == 0) {
       int64_t next = (int64_t)*coordinate + (int64_t)event->value;
       if (next < 0) next = 0;
       if (next >= limit) next = (int64_t)limit - 1;
@@ -318,14 +319,14 @@ static void mouse_route_relative(struct nxmouse_state *state,
 
 static void mouse_route_absolute(struct nxmouse_state *state,
                                  const struct os1_raw_input_event_v1 *event) {
-  long display = OS1_display_info();
-  int width = (int)((display >> 16) & 0xffff);
-  int height = (int)(display & 0xffff);
-  if (event->code == ABS_X && width > 0) {
+  int width = 0, height = 0;
+  if (OS1_display_get_size(&width, &height) != 0)
+    return;
+  if (event->code == ABS_X) {
     state->px = (int)((int64_t)event->value * (width - 1) / 32767);
     state->frame_motion = 1;
   }
-  if (event->code == ABS_Y && height > 0) {
+  if (event->code == ABS_Y) {
     state->py = (int)((int64_t)event->value * (height - 1) / 32767);
     state->frame_motion = 1;
   }

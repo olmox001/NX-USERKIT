@@ -362,9 +362,9 @@ static int tty_open_session(struct tty_session *s, const char *title) {
   if (s->port < 0) return s->port;
   int result = tty_renderer_init(s, TTY_WIDTH, TTY_HEIGHT);
   if (result != 0) return result;
-  long dimensions = OS1_display_info();
-  int sw = (int)((dimensions >> 16) & 0xffff);
-  int sh = (int)(dimensions & 0xffff);
+  int sw = 0, sh = 0;
+  result = OS1_display_get_size(&sw, &sh);
+  if (result != 0) return result;
   int wx = (sw - TTY_WIDTH) / 2 + ((server_pid * 31) % 160);
   int wy = (sh - TTY_HEIGHT) / 2 + ((server_pid * 13) % 110);
   if (wx < 0) wx = 45;
