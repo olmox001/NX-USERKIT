@@ -246,14 +246,15 @@ static void draw_cursor(const struct compositor_state *owner,
   }
 }
 
-static int render_frame(struct compositor_state *owner) {
-  long packed = OS1_display_info();
-  int width = (int)((packed >> 16) & 0xffff);
-  int height = (int)(packed & 0xffff);
-  if (width <= 0 || height <= 0 ||
-      (size_t)width > NXCOMPOSITOR_MAX_PIXELS / (size_t)height)
+static int render_frame(struct compositor_state *owner,
+                        uint32_t target_width, uint32_t target_height) {
+  if (target_width == 0U || target_height == 0U ||
+      (size_t)target_width >
+          NXCOMPOSITOR_MAX_PIXELS / (size_t)target_height)
     return -EINVAL;
-  size_t total = (size_t)width * (size_t)height;
+  int width = (int)target_width;
+  int height = (int)target_height;
+  size_t total = (size_t)target_width * (size_t)target_height;
   int allocated = OS1_gfx_buffer_reserve(&owner->frame, total);
   if (allocated != 0) return allocated;
   struct os1_gfx_surface frame = {
@@ -292,7 +293,7 @@ int main(void) {
     }
     if (running != 0) {
       consume_pointer_updates(&owner);
-      int rendered = render_frame(&owner);
+      int rendered = render_frame(&owner, state.width, state.height);
       if (rendered != 0) {
         OS1_report_error("nxcompositor.render_frame", rendered);
         running = 0;

@@ -12,8 +12,3 @@ NEXS_USERKIT_SERVICE_DIR_nxexample_echo := services/example/nxexample_echo
 NEXS_USERKIT_INTERNAL_INCLUDE_REL := services/nxttyd/include
 NEXS_USERKIT_PROJECT_INCLUDE_REL_nxttyd := services/nxttyd/include
 NEXS_USERKIT_PROJECT_EXTRA_SOURCES_nxttyd := services/nxttyd/lib/tty_model.c
-
-# Global-library requirements are symbolic. The integrating user project maps
-# each name to an archive; USERKIT never knows its repository or vendor path.
-NEXS_USERKIT_REQUIRED_GLOBAL_LIBS := keyboard_layout
-NEXS_USERKIT_PROJECT_GLOBAL_LIBS_nxkeyboardd := keyboard_layout

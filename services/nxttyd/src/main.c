@@ -48,7 +48,7 @@ struct tty_session {
   size_t capacity;
   int win, port, width, height, cell_w, cell_h;
   uint32_t caret_color; /* independent of cell FG and window surface */
-  int pid, shell, visible, finished, stopped, status;
+  int pid, shell, visible, headless, finished, stopped, status;
   long last_theme_check;
   char name[64];
 };
@@ -422,6 +422,22 @@ static int tty_spawn_job(struct tty_session *s, int argc,
   return 0;
 }
 
+static void tty_enter_headless(struct tty_session *s) {
+  if (!s || s->headless) return;
+  s->headless = 1;
+  if (s->win > 0) set_window_flags(s->win, 4);
+  s->visible = 0;
+}
+
+static int tty_drain_headless_output(struct tty_session *s) {
+  for (unsigned step = 0U; step < 8U; ++step) {
+    int result = tty_process_messages(s);
+    if (result != 0) return result;
+  }
+  tty_flush(s);
+  return 0;
+}
+
 static int tty_wait_job(struct tty_session *s) {
   if (s->finished) {
     tty_publish_session(s);
@@ -431,26 +447,30 @@ static int tty_wait_job(struct tty_session *s) {
   int last_win = -1, stable = 0;
   if (!s->visible) {
     for (unsigned probe = 0U;
-         probe < TTY_GRACE_MS / TTY_POLL_MS && !s->finished; ++probe) {
+         probe < TTY_GRACE_MS / TTY_POLL_MS && !s->finished &&
+         !s->headless; ++probe) {
       if (s->pid > 0 && execsvc_window_stable(s->pid, &last_win, &stable))
-        return 1;
-      if (s->pid > 0 &&
+        tty_enter_headless(s);
+      if (!s->headless && s->pid > 0 &&
           OS1low_process_wait_status(s->pid, &s->status) != -1)
         s->finished = 1;
-      if (!s->finished && tty_step(s, 0) < 0) return -EIO;
+      if (!s->headless && !s->finished && tty_step(s, 0) < 0)
+        return -EIO;
     }
-    tty_publish_session(s);
+    if (!s->headless) tty_publish_session(s);
   }
   if (s->pid > 0 && !s->finished) {
     for (uint64_t step = 0U; step < UINT64_MAX && !s->finished; ++step) {
-      if (execsvc_window_stable(s->pid, &last_win, &stable)) return 1;
-      if (OS1low_process_wait_status(s->pid, &s->status) != -1) {
+      if (!s->headless &&
+          execsvc_window_stable(s->pid, &last_win, &stable))
+        tty_enter_headless(s);
+      if (OS1low_process_wait_status(s->pid, &s->status) != -1)
         s->finished = 1;
-      }
       if (!s->finished && tty_step(s, 0) < 0) return -EIO;
     }
   }
-  return 0;
+  if (s->headless && tty_drain_headless_output(s) != 0) return -EIO;
+  return s->headless ? 1 : 0;
 }
 
 static void tty_dismiss(struct tty_session *s) {

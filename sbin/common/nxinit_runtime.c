@@ -8,7 +8,6 @@
  * process-reaping policy. The manager retains real process ownership.
  */
 #include <nxmanage.h>
-#include <nxsystem_image.h>
 #include <nxinit_runtime.h>
 #include <os1.h>
 #include <stdint.h>
@@ -16,8 +15,6 @@
 #include <string.h>
 
 enum { NXINIT_MANIFEST_BYTES = 2048, NXINIT_LINE_BYTES = 160,
-       NXINIT_LIBRARY_BYTES = 1024, NXINIT_LIBRARY_LINE_BYTES = 128,
-       NXINIT_LIBRARY_NAME_MAX = 24, NXINIT_LIBRARY_VALUE_MAX = 96,
        NXINIT_ACK_POLL_MS = 50, NXINIT_PORT_RETRIES = 40 };
 /* Manifest is owned by the single boot transaction, not global state. */
 
@@ -179,8 +176,7 @@ static int nxinit_line(int port, unsigned slot, char *line, int mdebug) {
       field[split++] = line + i + 1U;
     }
   }
-  if ((split != 5U && split != 6U) ||
-      !nxsystem_image_identity_valid(field[2]))
+  if ((split != 5U && split != 6U) || field[2][0] == '\0')
     return -EINVAL;
   uint32_t mode = 0U;
   if (strcmp(field[1], "lock") == 0)
@@ -189,6 +185,8 @@ static int nxinit_line(int port, unsigned slot, char *line, int mdebug) {
     mode = NXMANAGE_MODE_ONCE;
   else if (strcmp(field[1], "start") == 0)
     mode = NXMANAGE_MODE_START_ONCE;
+  else if (strcmp(field[1], "async") == 0)
+    mode = NXMANAGE_MODE_ASYNC_ONCE;
   else if (strcmp(field[1], "debug") == 0) {
     if (!mdebug)
       return 0; /* skipped by boot profile, not executed */
@@ -237,97 +235,6 @@ static int nxinit_manifest(int port, int mdebug) {
   return 0;
 }
 
-static int nxinit_library_name_valid(const char *name) {
-  if (name == NULL || name[0] == '\0') return -EINVAL;
-  for (unsigned i = 0U; i < NXMANAGE_LIBRARY_NAME_MAX; ++i) {
-    char ch = name[i];
-    if (ch == '\0') return 0;
-    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
-          ch == '_' || ch == '-')) return -EINVAL;
-  }
-  return -ENAMETOOLONG;
-}
-
-static int nxinit_library_name(int port, unsigned slot, const char *name) {
-  if (slot >= NXMANAGE_LIBRARY_SLOTS || nxinit_library_name_valid(name) != 0)
-    return -EINVAL;
-  struct ipc_message request = {0};
-  request.type = NXMANAGE_REQ_LIBRARY_NAME;
-  request.data1 = slot;
-  request.data2 = NXMANAGE_PROTO_VERSION;
-  for (unsigned i = 0U;
-       i < NXMANAGE_LIBRARY_NAME_MAX && name[i] != '\0'; ++i) {
-    request.payload[i] = name[i];
-  }
-  if (OS1_port_send(port, &request) != (long)sizeof(request)) return -EIO;
-  return nxinit_ack(slot, NXMANAGE_REP_LIBRARY_NAME);
-}
-
-static int nxinit_library_register(int port, unsigned slot,
-                                   const char *path, const char *abi) {
-  if (slot >= NXMANAGE_LIBRARY_SLOTS || path == NULL || abi == NULL ||
-      strncmp(path, "/lib/", 5U) != 0) return -EINVAL;
-  struct ipc_message request = {0};
-  request.type = NXMANAGE_REQ_LIBRARY_REGISTER;
-  request.data1 = slot;
-  request.data2 = NXMANAGE_PROTO_VERSION;
-  unsigned path_len = (unsigned)strnlen(path, NXMANAGE_LIBRARY_PATH_MAX);
-  unsigned abi_len = (unsigned)strnlen(abi, NXMANAGE_LIBRARY_ABI_MAX);
-  if (path_len == 0U || path_len >= NXMANAGE_LIBRARY_PATH_MAX ||
-      abi_len == 0U || abi_len >= NXMANAGE_LIBRARY_ABI_MAX ||
-      path_len + abi_len + 2U > sizeof(request.payload)) return -EINVAL;
-  if (memcpy(request.payload, path, path_len + 1U) != request.payload ||
-      memcpy(request.payload + path_len + 1U, abi, abi_len + 1U) !=
-          request.payload + path_len + 1U) return -EIO;
-  if (OS1_port_send(port, &request) != (long)sizeof(request)) return -EIO;
-  return nxinit_ack(slot, NXMANAGE_REP_LIBRARY_REGISTER);
-}
-
-static int nxinit_library_line(int port, unsigned slot, char *line) {
-  char *field[3] = {line, NULL, NULL};
-  unsigned split = 1U;
-  for (unsigned i = 0U; i < NXINIT_LIBRARY_LINE_BYTES && line[i] != '\0'; ++i) {
-    if (line[i] == '|') {
-      if (split >= 3U) return -EINVAL;
-      line[i] = '\0';
-      field[split++] = line + i + 1U;
-    }
-  }
-  if (split != 3U || nxinit_library_name_valid(field[0]) != 0 ||
-      strncmp(field[1], "/lib/", 5U) != 0 || field[2][0] == '\0') return -EINVAL;
-  int named = nxinit_library_name(port, slot, field[0]);
-  if (named != 0) return named;
-  return nxinit_library_register(port, slot, field[1], field[2]);
-}
-
-static int nxinit_libraries(int port) {
-  char manifest[NXINIT_LIBRARY_BYTES];
-  int n = file_read(NXMANAGE_LIBRARIES_CONFIG, manifest,
-                    sizeof(manifest) - 1U, 0);
-  if (n == -ENOENT || n == 0) return 0;
-  if (n < 0 || n >= (int)sizeof(manifest)) return -EIO;
-  manifest[n] = '\0';
-  unsigned slot = 0U;
-  unsigned start = 0U;
-  for (unsigned i = 0U; i < NXINIT_LIBRARY_BYTES; ++i) {
-    if (i > (unsigned)n) continue;
-    if (manifest[i] != '\n' && manifest[i] != '\0') continue;
-    unsigned length = i - start;
-    if (length >= NXINIT_LIBRARY_LINE_BYTES) return -EINVAL;
-    manifest[i] = '\0';
-    if (length > 0U && manifest[i - 1U] == '\r') manifest[i - 1U] = '\0';
-    char *line = manifest + start;
-    if (line[0] != '\0' && line[0] != '#') {
-      if (slot >= NXMANAGE_LIBRARY_SLOTS) return -ENOSPC;
-      int status = nxinit_library_line(port, slot, line);
-      if (status != 0) return status;
-      ++slot;
-    }
-    start = i + 1U;
-  }
-  return 0;
-}
-
 int nxinit_run(const struct nxinit_identity *identity) {
   if (identity == NULL || identity->name == NULL || identity->boot_message == NULL) {
     OS1_report_error("nxinit.identity", -EINVAL);
@@ -345,16 +252,13 @@ int nxinit_run(const struct nxinit_identity *identity) {
     OS1_report_error("nxinit.manager_port", port);
     return 1;
   }
-  int libraries = nxinit_libraries(port);
-  if (libraries != 0)
-    OS1_report_error("nxinit.libraries", libraries);
-  int manifest = libraries == 0 ? nxinit_manifest(port, mdebug) : libraries;
+  int manifest = nxinit_manifest(port, mdebug);
   if (manifest != 0)
     OS1_report_error("nxinit.manifest", manifest);
   long closed = OS1low_handle_close(port);
   if (closed < 0)
     OS1_report_error("nxinit.manager_handle_close", (int)closed);
-  if (libraries != 0 || manifest != 0 || closed < 0)
+  if (manifest != 0 || closed < 0)
     return 1;
   if (OS1_registry_set("system.init.name", identity->name) != 0) {
     OS1_report_error("nxinit.identity_publish", -EIO);
