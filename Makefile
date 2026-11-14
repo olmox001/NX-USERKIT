@@ -2,7 +2,7 @@
 
 ARCH ?= aarch64
 BUILD_ROOT ?= build
-NX_WARNINGS_AS_ERRORS ?= 0
+NX_WARNINGS_AS_ERRORS ?= 1
 NX_STRICT ?= 1
 HOST_OS ?= $(shell uname -s)
 
@@ -33,7 +33,7 @@ endif
 ifeq ($(findstring amd64,$(ARCH)),amd64)
   override ARCH := amd64
   CROSS_COMPILE ?= $(AMD64_CROSS_COMPILE)
-  ARCH_CFLAGS := -DARCH_AMD64 -mno-red-zone -mcmodel=large
+  ARCH_CFLAGS := -DARCH_AMD64 -mno-red-zone -mcmodel=large -Wa,--noexecstack
 else ifeq ($(findstring aarch64,$(ARCH)),aarch64)
   override ARCH := aarch64
   CROSS_COMPILE ?= $(AARCH64_CROSS_COMPILE)

@@ -8,7 +8,7 @@
 
 enum { USERKIT_RECORD_FIELDS = 4, USERKIT_RECORD_BYTES = 64 };
 
-static int userkit_parse_uint(const char *text, unsigned *value,
+static inline int userkit_parse_uint(const char *text, unsigned *value,
                               unsigned *consumed) {
   unsigned result = 0U;
   unsigned index = 0U;
@@ -28,7 +28,7 @@ static int userkit_parse_uint(const char *text, unsigned *value,
   return 0;
 }
 
-static int userkit_parse_record(const char *record, int *pid,
+static inline int userkit_parse_record(const char *record, int *pid,
                                 unsigned *generation, unsigned *mode,
                                 unsigned *status) {
   unsigned values[USERKIT_RECORD_FIELDS] = {0U, 0U, 0U, 0U};
@@ -61,7 +61,7 @@ static int userkit_parse_record(const char *record, int *pid,
   return 0;
 }
 
-static int userkit_test_service_state(const char *name, unsigned expected_mode,
+static inline int userkit_test_service_state(const char *name, unsigned expected_mode,
                                       unsigned expected_status,
                                       int require_live_pid) {
   char key[USERKIT_RECORD_BYTES];
@@ -94,15 +94,15 @@ static int userkit_test_service_state(const char *name, unsigned expected_mode,
   return printed < 0 ? 6 : 0;
 }
 
-static int userkit_test_lock_service(const char *name) {
+static inline int userkit_test_lock_service(const char *name) {
   return userkit_test_service_state(name, NXMANAGE_MODE_LOCK, 1U, 1);
 }
 
-static int userkit_test_start_service(const char *name) {
+static inline int userkit_test_start_service(const char *name) {
   return userkit_test_service_state(name, NXMANAGE_MODE_START_ONCE, 1U, 1);
 }
 
-static int userkit_test_once_service(const char *name) {
+static inline int userkit_test_once_service(const char *name) {
   return userkit_test_service_state(name, NXMANAGE_MODE_ONCE, 3U, 0);
 }
 

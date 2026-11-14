@@ -388,7 +388,7 @@ static int tty_open_session(struct tty_session *s, const char *title) {
 
 static int tty_spawn_job(struct tty_session *s, int argc,
                          const struct tty_argv_vector *args,
-                         const char *program, const char *title) {
+                         const char *program) {
   char path[EXECSVC_PATH_MAX];
   char *job_argv[EXECSVC_LOCAL_ARG_MAX];
   for (int i = 0; i < EXECSVC_LOCAL_ARG_MAX; ++i)
@@ -516,7 +516,7 @@ int main(int argc, const struct tty_argv_vector *args) {
     job_args.values[i] = args->values[program_index + i - 1];
   int status = tty_open_session(s, title);
   if (status == 0)
-    status = tty_spawn_job(s, job_argc, &job_args, program, title);
+    status = tty_spawn_job(s, job_argc, &job_args, program);
   if (status == 0) status = tty_wait_job(s);
   if (status == 0) tty_dismiss(s);
   tty_release(s);
