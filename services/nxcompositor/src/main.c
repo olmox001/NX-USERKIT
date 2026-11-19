@@ -9,8 +9,7 @@
  */
 #include <font_lib.h>
 #include <os1.h>
-#include <os1_gfx.h>
-#include <os1_theme.h>
+#include <os1_libgraphics.h>
 #include <os1_surface.h>
 #include <os1_gfx_buffer.h>
 #include <stddef.h>
@@ -26,6 +25,7 @@
 /* The process owns frame/snapshot allocations and device state. No
  * translation-unit mutable storage or cross-service pointer ownership. */
 struct compositor_state {
+  os1_theme_state_t theme;
   struct font_ctx *font;
   int font_loaded;
   int pointer_x;
@@ -38,6 +38,7 @@ struct compositor_state {
 };
 
 static void compositor_state_init(struct compositor_state *owner) {
+  os1_theme_state_init(&owner->theme);
   OS1_gfx_buffer_init(&owner->frame);
   OS1_gfx_buffer_init(&owner->scene);
   OS1_gfx_buffer_init(&owner->snapshot);
@@ -89,17 +90,17 @@ static void consume_pointer_updates(struct compositor_state *owner) {
       int style = (int)(int64_t)msg.data1;
       int palette = (int)(int64_t)msg.data2;
       if (style >= 0) {
-        int rc = os1_theme_set_style(style);
+        int rc = os1_theme_set_style(&owner->theme, style);
         if (rc != 0)
           OS1_report_error("nxcompositor.theme_style", rc);
       }
       if (palette >= 0) {
-        int rc = os1_theme_set_palette(palette);
+        int rc = os1_theme_set_palette(&owner->theme, palette);
         if (rc != 0)
           OS1_report_error("nxcompositor.theme_palette", rc);
       }
     } else if (msg.type == IPC_THEME_BACKGROUND) {
-      int rc = os1_theme_set_background((int)(int64_t)msg.data1);
+      int rc = os1_theme_set_background(&owner->theme, (int)(int64_t)msg.data1);
       if (rc != 0)
         OS1_report_error("nxcompositor.theme_background", rc);
     }
@@ -226,8 +227,8 @@ static int draw_windows(struct compositor_state *owner,
   int count = enumerate_windows(windows);
   if (count < 0) return count;
   sort_windows(windows, count);
-  const struct os1_compositor_style *style = os1_theme_style_active();
-  const struct os1_compositor_theme *theme = os1_theme_palette_active();
+  const struct os1_compositor_style *style = os1_theme_style_active(&owner->theme);
+  const struct os1_compositor_theme *theme = os1_theme_palette_active(&owner->theme);
   if (!owner->font_loaded) {
     owner->font = font_load("/fonts/Rewir-Light.off");
     owner->font_loaded = 1;
@@ -287,7 +288,7 @@ static int compositor_pixel_count(int width, int height, size_t *total) {
 
 static int compose_scene(struct compositor_state *owner,
                          struct os1_gfx_surface *scene) {
-  paint_background(scene, os1_theme_background_active());
+  paint_background(scene, os1_theme_background_active(&owner->theme));
   int drawn = draw_windows(owner, scene);
   if (drawn != 0) return drawn;
   draw_cursor(owner, scene);

@@ -79,6 +79,8 @@ ifeq ($(SDK_SOURCE_MODE),1)
   NXSDK_OUTPUT_NAMESPACE := system
   include $(NXSDK_ROOT)/sdk.mk
   SDK_LINK_INPUTS := $(NXSDK_CORE_LIB_OBJECTS) $(NXSDK_MALLOC_OBJECT) $(NXSDK_SYSCALL_OBJECT)
+  $(SDK_LINK_INPUTS): | sdk
+	@test -s "$@"
   .PHONY: sdk
   sdk:
 	@$(MAKE) -C "$(NXSDK_ROOT)" ARCH="$(ARCH)" BUILD_ROOT="$(SDK_BUILD_ROOT)" core
