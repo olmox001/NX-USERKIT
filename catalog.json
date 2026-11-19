@@ -12,7 +12,7 @@
     {"project":"nxcompositor","name":"compositor","executable":"/sys/services/nxcompositor","mode":"lock","registry":"srv.compositor_pid","authority":""},
     {"project":"nxkeyboardd","name":"keyboard","executable":"/sys/services/nxkeyboardd","mode":"lock","registry":"","authority":""},
     {"project":"nxmoused","name":"pointer","executable":"/sys/services/nxmoused","mode":"lock","registry":"srv.mouse_pid","authority":"window-manage"},
-    {"project":"nxttyd","name":"shell","executable":"/sys/services/nxttyd","mode":"start","registry":"","authority":""}
+    {"project":"nxttyd","name":"terminal","executable":"/sys/services/nxttyd","mode":"start","registry":"","authority":""}
   ],
   "examples": [
     {"project":"nxnotify_registry","replaces":"nxntfy_srv","name":"notify","executable":"/sys/services/nxnotify_registry","mode":"lock","registry":"srv.notify_pid","authority":""},

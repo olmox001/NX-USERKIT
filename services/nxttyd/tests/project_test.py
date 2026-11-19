@@ -7,7 +7,7 @@ meta=(root/"project.mk").read_text()
 checks=[
     ("main entry", "int main(" in source),
     ("project id", "USERKIT_PROJECT := nxttyd" in meta),
-    ("logical name", "USERKIT_SERVICE_NAME := shell" in meta),
+    ("logical name", "USERKIT_SERVICE_NAME := terminal" in meta),
     ("service path", "USERKIT_EXECUTABLE := /sys/services/nxttyd" in meta),
     ("service-owned controller", "controller_pid" in source),
     ("controller input routing",

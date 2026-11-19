@@ -354,11 +354,11 @@ struct tty_argv_vector {
   char *values[EXECSVC_LOCAL_ARG_MAX];
 };
 
-static void tty_publish_session(struct tty_session *s) {
-  if (!s || s->visible || s->win <= 0) return;
-  set_window_flags(s->win, 2);
-  set_focus(get_pid());
-  s->visible = 1;
+static int tty_publish_session(struct tty_session *s) {
+  if (s->visible) return 0;
+  int rc = OS1_window_focus(s->win);
+  if (rc == 0) s->visible = 1;
+  return rc;
 }
 
 static int tty_open_session(struct tty_session *s, const char *title) {
@@ -411,8 +411,8 @@ static int tty_spawn_job(struct tty_session *s, int argc,
     s->finished = 1;
   } else {
     s->controller_pid =
-        execsvc_launch(job_argc, job_argv, EXECSVC_MODE_FOREGROUND,
-                       redirection, nredir, path, sizeof(path));
+        execsvc_launch_search(job_argc, job_argv, path, sizeof(path),
+                              SPAWN_FLAG_USER, redirection, nredir, 0);
   }
   for (int i = 0; i < SPAWN_MAX_REDIR && i < nfds; ++i) {
     int rc = close(fds[i]);
@@ -447,9 +447,9 @@ static int tty_drain_headless_output(struct tty_session *s) {
 
 static int tty_wait_job(struct tty_session *s) {
   if (s->finished) {
-    tty_publish_session(s);
+    int rc = tty_publish_session(s);
     tty_flush(s);
-    return 0;
+    return rc;
   }
   int last_win = -1, stable = 0;
   if (!s->visible) {
@@ -465,7 +465,10 @@ static int tty_wait_job(struct tty_session *s) {
       if (!s->headless && !s->finished && tty_step(s, 0) < 0)
         return -EIO;
     }
-    if (!s->headless) tty_publish_session(s);
+    if (!s->headless) {
+      int rc = tty_publish_session(s);
+      if (rc != 0) return rc;
+    }
   }
   if (s->controller_pid > 0 && !s->finished) {
     for (uint64_t step = 0U; step < UINT64_MAX && !s->finished; ++step) {
