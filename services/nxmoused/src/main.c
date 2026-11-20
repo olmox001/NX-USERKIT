@@ -1,9 +1,8 @@
 /* nxmoused: ring-3 pointer aggregation, hit testing, focus and capture. */
 #include <os1_surface.h>
 #include <os1.h>
-#include <os1_gfx.h>
+#include <os1_libgraphics.h>
 #include <os1_input.h>
-#include <os1_theme.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +31,7 @@
  * slots, button reference counts and frame queues stay in this same struct. */
 #define NX_MOUSE_MAX_DEVICES 256U
 struct nxmouse_state {
+  os1_theme_state_t theme;
   int px, py, dragging, drag_dx, drag_dy;
   int resizing, resize_x, resize_y, resize_w, resize_h;
   int buttons[3], capture[3];
@@ -50,12 +50,13 @@ static int topmost(const struct os1_window_snapshot_v1 *a,
   return a->id > b->id;
 }
 
-static int titlebar_height(void) {
-  const struct os1_compositor_style *style = os1_theme_style_active();
+static int titlebar_height(const struct nxmouse_state *state) {
+  const struct os1_compositor_style *style = os1_theme_style_active(&state->theme);
   return style && style->titlebar ? style->titlebar_height : 0;
 }
 
-static int hit_test(int x, int y, struct os1_window_snapshot_v1 *result) {
+static int hit_test(const struct nxmouse_state *state, int x, int y,
+                    struct os1_window_snapshot_v1 *result) {
   struct window_info list[MAX_WINDOWS];
   long n = OS1_window_enum(list, MAX_WINDOWS);
   int found = 0;
@@ -67,7 +68,7 @@ static int hit_test(int x, int y, struct os1_window_snapshot_v1 *result) {
     };
     if (OS1_window_snapshot(&s) != 0 || !(s.flags & WININFO_VISIBLE) ||
         (s.flags & WININFO_PASSIVE)) continue;
-    int title = (s.flags & WININFO_TOPMOST) ? 0 : titlebar_height();
+    int title = (s.flags & WININFO_TOPMOST) ? 0 : titlebar_height(state);
     if (x < s.x || x >= s.x + s.draw_width || y < s.y - title ||
         y >= s.y + s.draw_height) continue;
     if (!found || topmost(&s, &best)) { best = s; found = 1; }
@@ -128,7 +129,7 @@ static void clamp_pointer(struct nxmouse_state *state) {
 static int mouse_title_action(struct nxmouse_state *state,
                               const struct os1_window_snapshot_v1 *s,
                               int title) {
-  const struct os1_compositor_style *style = os1_theme_style_active();
+  const struct os1_compositor_style *style = os1_theme_style_active(&state->theme);
   if (!title || style == NULL || (s->flags & WININFO_PROTECTED))
     return 0;
   struct os1_gfx_button_geometry geometry;
@@ -171,7 +172,7 @@ static void button_event(struct nxmouse_state *state, unsigned code, int value) 
     return;
   }
   struct os1_window_snapshot_v1 s;
-  if (!hit_test(state->px, state->py, &s)) return;
+  if (!hit_test(state, state->px, state->py, &s)) return;
   if (b == 0) {
     long focused = OS1_window_focus(s.id);
     if (focused != 0) {
@@ -179,10 +180,15 @@ static void button_event(struct nxmouse_state *state, unsigned code, int value) 
                        (int)(focused < 0 ? focused : -EIO));
       return;
     }
-    int title = (s.flags & WININFO_TOPMOST) ? 0 : titlebar_height();
+    int title = (s.flags & WININFO_TOPMOST) ? 0 : titlebar_height(state);
     if (mouse_title_action(state, &s, title))
       return;
-    if (state->px >= s.x + s.draw_width - 12 && state->py >= s.y + s.draw_height - 12) {
+    /* Overlays are owner-anchored chrome, not application windows with a
+     * resize grip. Sending a WM present-resize for a dock/bar edge races the
+     * plugin layout, leaving its buffer cropped or detached from the edge. */
+    if (!(s.flags & WININFO_TOPMOST) &&
+        state->px >= s.x + s.draw_width - 12 &&
+        state->py >= s.y + s.draw_height - 12) {
       state->resizing = s.id; state->resize_x = state->px; state->resize_y = state->py;
       state->resize_w = s.draw_width; state->resize_h = s.draw_height;
       return;
@@ -245,7 +251,7 @@ static void mouse_sync_motion(struct nxmouse_state *state) {
   if (state->frame_motion &&
       !(state->buttons[0] && (state->dragging || state->resizing))) {
     struct os1_window_snapshot_v1 snapshot;
-    if (hit_test(state->px, state->py, &snapshot))
+    if (hit_test(state, state->px, state->py, &snapshot))
       send_mouse(state, &snapshot, 0, 2);
   }
   if (state->frame_motion)
@@ -255,7 +261,7 @@ static void mouse_sync_motion(struct nxmouse_state *state) {
 static void mouse_sync_wheel(struct nxmouse_state *state) {
   if (state->frame_wheel) {
     struct os1_window_snapshot_v1 snapshot;
-    if (hit_test(state->px, state->py, &snapshot))
+    if (hit_test(state, state->px, state->py, &snapshot))
       send_mouse(state, &snapshot, 0x120u, (unsigned)state->frame_wheel);
   }
 }
@@ -363,28 +369,29 @@ static void route_event(struct nxmouse_state *state,
     mouse_route_absolute(state, event);
 }
 
-static void mouse_apply_control(struct ipc_message *control) {
+static void mouse_apply_control(struct nxmouse_state *state,
+                                const struct ipc_message *control) {
   if (control->type == IPC_THEME_STYLE) {
     int style = (int)(int64_t)control->data1;
     int palette = (int)(int64_t)control->data2;
     if (style >= 0) {
-      int rc = os1_theme_set_style(style);
+      int rc = os1_theme_set_style(&state->theme, style);
       if (rc != 0)
         OS1_report_error("nxmoused.theme_style", rc);
     }
     if (palette >= 0) {
-      int rc = os1_theme_set_palette(palette);
+      int rc = os1_theme_set_palette(&state->theme, palette);
       if (rc != 0)
         OS1_report_error("nxmoused.theme_palette", rc);
     }
   } else if (control->type == IPC_THEME_BACKGROUND) {
-    int rc = os1_theme_set_background((int)(int64_t)control->data1);
+    int rc = os1_theme_set_background(&state->theme, (int)(int64_t)control->data1);
     if (rc != 0)
       OS1_report_error("nxmoused.theme_background", rc);
   }
 }
 
-static void mouse_drain_control(void) {
+static void mouse_drain_control(struct nxmouse_state *state) {
   struct ipc_message control;
   int receiving = 1;
   for (unsigned i = 0U; i < 8U; ++i) {
@@ -401,7 +408,7 @@ static void mouse_drain_control(void) {
       receiving = 0;
       continue;
     }
-    mouse_apply_control(&control);
+    mouse_apply_control(state, &control);
   }
 }
 
@@ -429,9 +436,10 @@ static void mouse_drain_input(struct nxmouse_state *state) {
 
 int main(void) {
   struct nxmouse_state state = {.px = 400, .py = 300};
+  os1_theme_state_init(&state.theme);
   publish_pointer(&state);
   for (uint64_t epoch = 0U; epoch < UINT64_MAX; ++epoch) {
-    mouse_drain_control();
+    mouse_drain_control(&state);
     mouse_drain_input(&state);
     OS1_sleep(5);
   }

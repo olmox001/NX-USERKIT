@@ -121,14 +121,73 @@ static int nxinit_name(int port, unsigned slot, const char *name) {
   return nxinit_ack(slot, NXMANAGE_REP_NAME);
 }
 
-/* The immutable manifest grants optional rights at startup, not on use.
- * Every slot authenticates its mask before becoming executable. */
-static int nxinit_auth(int port, unsigned slot, const char *authority) {
-  uint32_t caps = CAP_ALL;
-  if (authority[0] != '\0') {
-    if (strcmp(authority, "window-manage") != 0) return -EINVAL;
-    caps |= CAP_WINDOW_MANAGE;
+/* Symbolic service rights come from the image's immutable policy manifest.
+ * Unknown, repeated or truncated tokens are rejected, not interpreted as
+ * broad ROOT authority. This is startup policy, never a kernel identity. */
+static int nxinit_cap_token(const char *name, unsigned length,
+                            uint32_t *bit) {
+  if (length == 5U && strncmp(name, "spawn", length) == 0)
+    *bit = CAP_SPAWN;
+  else if (length == 8U && strncmp(name, "fs-write", length) == 0)
+    *bit = CAP_FS_WRITE;
+  else if (length == 7U && strncmp(name, "ipc-any", length) == 0)
+    *bit = CAP_IPC_ANY;
+  else if (length == 6U && strncmp(name, "window", length) == 0)
+    *bit = CAP_WINDOW;
+  else if (length == 14U &&
+           strncmp(name, "registry-write", length) == 0)
+    *bit = CAP_REG_WRITE;
+  else if (length == 13U &&
+           strncmp(name, "window-manage", length) == 0)
+    *bit = CAP_WINDOW_MANAGE;
+  else if (length == 12U && strncmp(name, "keyboard-raw", length) == 0)
+    *bit = CAP_KEYBOARD_RAW;
+  else if (length == 11U && strncmp(name, "pointer-raw", length) == 0)
+    *bit = CAP_POINTER_RAW;
+  else
+    return -EINVAL;
+  return 0;
+}
+
+static int nxinit_caps_from_manifest(const char *authority,
+                                     uint32_t *caps) {
+  if (authority == NULL || caps == NULL ||
+      strncmp(authority, "caps:", 5U) != 0)
+    return -EINVAL;
+  uint32_t mask = 0U;
+  unsigned start = 5U, seen = 0U;
+  for (unsigned pos = 5U; pos < 64U; ++pos) {
+    char ch = authority[pos];
+    if (ch == ',' || ch == '\0') {
+      unsigned len = pos - start;
+      if (len == 0U) return -EINVAL;
+      if (len == 4U && strncmp(authority + start, "none", len) == 0) {
+        if (seen != 0U || ch != '\0') return -EINVAL;
+        *caps = 0U;
+        return 0;
+      }
+      uint32_t bit = 0U;
+      if (nxinit_cap_token(authority + start, len, &bit) != 0 ||
+          (mask & bit) != 0U)
+        return -EINVAL;
+      mask |= bit;
+      ++seen;
+      if (ch == '\0') {
+        *caps = mask;
+        return 0;
+      }
+      start = pos + 1U;
+    }
   }
+  return -EINVAL;
+}
+
+/* The selected image must declare every service's capability mask. A
+ * missing field never falls back to CAP_ALL or an ambient ROOT preset. */
+static int nxinit_auth(int port, unsigned slot, const char *authority) {
+  uint32_t caps = 0U;
+  int parsed = nxinit_caps_from_manifest(authority, &caps);
+  if (parsed != 0) return parsed;
   struct ipc_message request = {0};
   request.type = NXMANAGE_REQ_AUTH;
   request.data1 = slot;
@@ -176,7 +235,7 @@ static int nxinit_line(int port, unsigned slot, char *line, int mdebug) {
       field[split++] = line + i + 1U;
     }
   }
-  if ((split != 5U && split != 6U) || field[2][0] == '\0')
+  if (split != 6U || field[2][0] == '\0')
     return -EINVAL;
   uint32_t mode = 0U;
   if (strcmp(field[1], "lock") == 0)

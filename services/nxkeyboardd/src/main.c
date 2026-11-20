@@ -20,7 +20,10 @@ static void route_key(unsigned code, int value, struct os1_keyboard_state *state
   }
   int focus = 0;
   for (long i = 0; i < n && i < 40 && focus <= 0; ++i)
-    if (windows[i].flags & WININFO_FOCUSED) focus = windows[i].pid;
+    if ((windows[i].flags & (WININFO_VISIBLE | WININFO_FOCUSED |
+                             WININFO_MINIMIZED | WININFO_PASSIVE)) ==
+        (WININFO_VISIBLE | WININFO_FOCUSED))
+      focus = windows[i].pid;
   if (focus <= 0) return;
   struct ipc_message m = {0};
   m.type = IPC_TYPE_INPUT;

@@ -48,7 +48,7 @@ struct tty_session {
   size_t capacity;
   int win, port, width, height, cell_w, cell_h;
   uint32_t caret_color; /* independent of cell FG and window surface */
-  int pid, shell, visible, headless, finished, stopped, status;
+  int controller_pid, visible, headless, finished, stopped, status;
   long last_theme_check;
   char name[64];
 };
@@ -187,7 +187,20 @@ static void tty_render_row(struct tty_session *s, int row) {
       os1_gfx_fill_rect(&surface, &bg, cell->bg);
     if (cell->ch >= 32U && cell->ch < 127U && cell->ch != ' ') {
       char glyph[2] = {(char)cell->ch, 0};
-      font_draw_string_surface(&surface, s->font, x, 0, glyph, cell->fg);
+      /* Rewir is proportional: center its advance inside one fixed-width
+       * terminal cell and clip it so adjacent cells never overwrite. */
+      size_t available = (size_t)s->width - (size_t)x;
+      size_t cell_width = available < (size_t)s->cell_w ?
+                          available : (size_t)s->cell_w;
+      struct os1_gfx_surface cell_surface = {
+        surface.pixels + x, cell_width, (size_t)h,
+        surface.stride, surface.capacity - (size_t)x
+      };
+      int glyph_advance = font_string_width(s->font, glyph);
+      int inset = glyph_advance < s->cell_w ?
+                  (s->cell_w - glyph_advance) / 2 : 0;
+      font_draw_string_surface(&cell_surface, s->font, inset, 0,
+                               glyph, cell->fg);
     }
   }
   if (s->vt.cursor_visible && !s->finished && s->vt.x < s->vt.cols &&
@@ -276,26 +289,21 @@ static int tty_handle_input(struct tty_session *s, int on_finished) {
          * userland nxcompositor scales it until a valid resize can commit. */
         continue;
       }
-      if (!on_finished) {
-        long sent = OS1low_ipc_send(s->pid, &msg);
+      if (!on_finished && s->controller_pid > 0) {
+        long sent = OS1low_ipc_send(s->controller_pid, &msg);
         if (sent != 0) return -EIO;
       }
     } else if (msg.type == IPC_TYPE_INPUT && msg.data2 != 0U) {
       char c = msg.payload[0];
       if (on_finished && (c == '\r' || c == '\n')) return 1;
-      if (!on_finished) {
-        if (!s->shell && c == 0x03) {
-          if (kill_process(s->pid) < 0) return -EIO;
-          s->finished = 1;
-          tty_text(s, "^C\r\n", 4U);
-          continue;
-        }
-        long sent = OS1low_ipc_send(s->pid, &msg);
+      if (!on_finished && s->controller_pid > 0) {
+        /* Input belongs to the session controller. nxttyd never performs a
+         * second unconditional echo: interactive controllers and foreground
+         * jobs render their own terminal output through OS1_TTY_WRITE. Control
+         * characters are forwarded unchanged so job-control policy stays with
+         * the controller rather than being guessed by the renderer. */
+        long sent = OS1low_ipc_send(s->controller_pid, &msg);
         if (sent != 0) return -EIO;
-        if (!s->shell && c >= 32 && c < 127)
-          tty_text(s, &c, 1U);
-        if (!s->shell && (c == '\n' || c == '\r'))
-          tty_text(s, "\r\n", 2U);
       }
     } else if (msg.type == IPC_TYPE_NOTIFY &&
                msg.data2 == IPC_LOOK_PING_MAGIC) {
@@ -346,11 +354,11 @@ struct tty_argv_vector {
   char *values[EXECSVC_LOCAL_ARG_MAX];
 };
 
-static void tty_publish_session(struct tty_session *s) {
-  if (!s || s->visible || s->win <= 0) return;
-  set_window_flags(s->win, 2);
-  set_focus(get_pid());
-  s->visible = 1;
+static int tty_publish_session(struct tty_session *s) {
+  if (s->visible) return 0;
+  int rc = OS1_window_focus(s->win);
+  if (rc == 0) s->visible = 1;
+  return rc;
 }
 
 static int tty_open_session(struct tty_session *s, const char *title) {
@@ -375,11 +383,9 @@ static int tty_open_session(struct tty_session *s, const char *title) {
   /* First paint must cover every pixel, not just full text-cell rows. */
   OS1_window_blit(s->win, 0, 0, s->width, s->height, s->pixels);
   /* Establish self_rendered before the first child message arrives.
-   * A hosted shell is already classified: publish/focus its TTY before
-   * spawning it so the first prompt cannot race keyboard routing. Other
-   * programs stay hidden during the existing own-window grace period. */
+   * Visibility is decided only by the existing GUI/CLI classification after
+   * the controller starts; executable identity never changes TTY routing. */
   tty_flush(s);
-  if (s->shell) tty_publish_session(s);
   /* Environment propagation is the EXISTING process-create mechanism.
    * stdout/stderr remain ordinary CONSOLE descriptor types; file/pipe
    * redirections continue bypassing the TTY renderer. */
@@ -404,14 +410,15 @@ static int tty_spawn_job(struct tty_session *s, int argc,
     tty_text(s, error, strlen(error));
     s->finished = 1;
   } else {
-    s->pid = execsvc_launch(job_argc, job_argv, EXECSVC_MODE_FOREGROUND,
-                            redirection, nredir, path, sizeof(path));
+    s->controller_pid =
+        execsvc_launch_search(job_argc, job_argv, path, sizeof(path),
+                              SPAWN_FLAG_USER, redirection, nredir, 0);
   }
   for (int i = 0; i < SPAWN_MAX_REDIR && i < nfds; ++i) {
     int rc = close(fds[i]);
     if (rc != 0) OS1_report_error("nxttyd.redir_close", errno);
   }
-  if (s->pid <= 0) {
+  if (s->controller_pid <= 0) {
     const char *message = "Unable to execute: ";
     tty_text(s, message, strlen(message));
     tty_text(s, program, strlen(program));
@@ -440,31 +447,35 @@ static int tty_drain_headless_output(struct tty_session *s) {
 
 static int tty_wait_job(struct tty_session *s) {
   if (s->finished) {
-    tty_publish_session(s);
+    int rc = tty_publish_session(s);
     tty_flush(s);
-    return 0;
+    return rc;
   }
   int last_win = -1, stable = 0;
   if (!s->visible) {
     for (unsigned probe = 0U;
          probe < TTY_GRACE_MS / TTY_POLL_MS && !s->finished &&
          !s->headless; ++probe) {
-      if (s->pid > 0 && execsvc_window_stable(s->pid, &last_win, &stable))
+      if (s->controller_pid > 0 &&
+          execsvc_window_stable(s->controller_pid, &last_win, &stable))
         tty_enter_headless(s);
-      if (!s->headless && s->pid > 0 &&
-          OS1low_process_wait_status(s->pid, &s->status) != -1)
+      if (!s->headless && s->controller_pid > 0 &&
+          OS1low_process_wait_status(s->controller_pid, &s->status) != -1)
         s->finished = 1;
       if (!s->headless && !s->finished && tty_step(s, 0) < 0)
         return -EIO;
     }
-    if (!s->headless) tty_publish_session(s);
+    if (!s->headless) {
+      int rc = tty_publish_session(s);
+      if (rc != 0) return rc;
+    }
   }
-  if (s->pid > 0 && !s->finished) {
+  if (s->controller_pid > 0 && !s->finished) {
     for (uint64_t step = 0U; step < UINT64_MAX && !s->finished; ++step) {
       if (!s->headless &&
-          execsvc_window_stable(s->pid, &last_win, &stable))
+          execsvc_window_stable(s->controller_pid, &last_win, &stable))
         tty_enter_headless(s);
-      if (OS1low_process_wait_status(s->pid, &s->status) != -1)
+      if (OS1low_process_wait_status(s->controller_pid, &s->status) != -1)
         s->finished = 1;
       if (!s->finished && tty_step(s, 0) < 0) return -EIO;
     }
@@ -488,19 +499,12 @@ static void tty_dismiss(struct tty_session *s) {
 int main(int argc, const struct tty_argv_vector *args) {
   if (argc < 2 || argc > EXECSVC_LOCAL_ARG_MAX || args == NULL ||
       args->values[1] == NULL) return 1;
-  int program_index = 1;
-  int shell_mode = 0;
-  if (strcmp(args->values[1], "--shell") == 0) {
-    if (argc < 3 || args->values[2] == NULL) return 1;
-    shell_mode = 1;
-    program_index = 2;
-  }
+  const int program_index = 1;
   static struct tty_session session;
   struct tty_session *s = &session;
   s->port = -1;
   s->win = -1;
-  s->pid = -1;
-  s->shell = shell_mode;
+  s->controller_pid = -1;
   char clean[EXECSVC_PATH_MAX];
   const char *program = execsvc_strip_path_quotes(
       args->values[program_index], clean, sizeof(clean));
